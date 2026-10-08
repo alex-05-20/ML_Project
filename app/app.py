@@ -162,51 +162,171 @@ def prepare_cycle(cycle, ps2, fs1, feature_names):
 
     return frame
 
-
 def main():
-    st.set_page_config(page_title="État de la valve", page_icon="🔍")
-    st.title("Prédiction de l’état de la valve")
-    st.write("Sélectionnez un cycle pour analyser les signaux PS2 et FS1.")
+    st.set_page_config(
+        page_title="Projet 1 : Maintenance Predictive",
+        layout="wide",
+    )
+    st.markdown("""
+    <style>
+    .hero {background: linear-gradient(120deg, #10263d, #125a69);
+           padding: 2rem; border-radius: 18px; color: white; margin-bottom: 1.5rem;}
+    .hero h1 {color: white; margin: 0; font-size: 2.5rem;}
+    .hero p {color: #d4e7ec; max-width: 760px; margin-bottom: 0;}
+    .eyebrow {color: #80ddd0; letter-spacing: .12em; font-size: .8rem;
+              font-weight: 700; margin-bottom: .6rem;}
+    </style>
+    <div class="hero">
+      <div class="eyebrow">DIAGNOSTIC DU SYSTÈME HYDRAULIQUE</div>
+      <h1>MAintenance Predictive</h1>
+      <p>Explorez les signaux de pression et de débit pour estimer l’état
+      de la valve, cycle par cycle.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    with st.form("prediction"):
-        cycle = st.number_input(
-            "Numéro de cycle",
-            min_value=1,
-            max_value=MAX_CYCLE,
-            value=1,
-            step=1,
+    with st.sidebar:
+        st.title("Maintenance Predictive")
+        st.caption("Projet Machine Learning · Classification binaire")
+        st.divider()
+        st.subheader("Les capteurs")
+        st.markdown("**PS2 · Pression**\n\n100 Hz · 6 000 mesures par cycle · bar")
+        st.markdown("**FS1 · Débit volumique**\n\n10 Hz · 600 mesures par cycle · L/min")
+        st.divider()
+        st.markdown("**Classes du modèle**\n\n0 → Optimal\n\n1 → Non-optimal")
+        st.caption("Un cycle dure 60 secondes. L’analyse utilise les données enregistrées du projet.")
+
+    overview = st.columns(4)
+    for col, label, value in zip(
+        overview,
+        ["Cycles disponibles", "Capteurs", "Durée d’un cycle", "Modèle de référence"],
+        [f"{MAX_CYCLE:,}".replace(",", " "), "2", "60 s", "SVM"],
+    ):
+        col.metric(label, value)
+
+    diagnostic_tab, model_tab, project_tab = st.tabs(
+        ["Diagnostic du cycle", "Modèle et caractéristiques", "À propos du projet"]
+    )
+
+    with project_tab:
+        st.subheader("Comprendre l’état de la valve")
+        st.write(
+            "Ce projet étudie un système hydraulique à partir de deux séries temporelles : "
+            "la pression PS2 et le débit FS1. Le modèle classe chaque cycle en "
+            "fonctionnement optimal ou non-optimal."
         )
-        submitted = st.form_submit_button("Prédire")
-
-    if not submitted:
-        return
-
-    try:
-        with st.spinner("Analyse du cycle…"):
-            model, feature_names = load_model()
-            ps2, fs1 = load_signals()
-            features = prepare_cycle(cycle, ps2, fs1, feature_names)
-
-            prediction = int(model.predict(features)[0])
-            probabilities = model.predict_proba(features)[0]
-            by_class = dict(zip(model.classes_, probabilities))
-
-        label = {0: "Optimal", 1: "Non-optimal"}[prediction]
-        st.subheader(f"Cycle {cycle} : {label}")
-        st.metric(
-            "Probabilité de la classe prédite",
-            f"{by_class[prediction]:.2%}",
-        )
-
         left, right = st.columns(2)
-        left.metric("Optimal (0)", f"{by_class[0]:.2%}")
-        right.metric("Non-optimal (1)", f"{by_class[1]:.2%}")
-        st.caption("Les probabilités sont des estimations du modèle.")
+        with left:
+            st.subheader("Des signaux à la prédiction")
+            st.markdown(
+                "1. Sélection d’un cycle enregistré.\n"
+                "2. Extraction des statistiques et des caractéristiques du signal.\n"
+                "3. Standardisation avec le pipeline sauvegardé.\n"
+                "4. Classification et estimation des probabilités."
+            )
+        with right:
+            st.subheader("Interprétation des classes")
+            st.write("Optimal (0) correspond à une condition de valve égale à 100 dans les données d’entraînement.")
+            st.write("Non-optimal (1) regroupe les autres conditions. Cette classe ne précise pas le niveau de dégradation.")
+        st.info("Les résultats affichés sont des prédictions du modèle, pas les étiquettes réelles des cycles.")
 
-    except FileNotFoundError as exc:
-        st.error(f"Fichier introuvable : {exc.filename}")
-    except Exception as exc:
-        st.error(f"Impossible de réaliser la prédiction : {exc}")
+    with diagnostic_tab:
+        st.subheader("Analyser un cycle")
+        st.write("Sélectionnez un cycle pour consulter le diagnostic et les mesures qui l’accompagnent.")
+        with st.form("prediction"):
+            cycle = st.number_input(
+                "Numéro de cycle", min_value=1, max_value=MAX_CYCLE, value=1, step=1
+            )
+            submitted = st.form_submit_button("Analyser le cycle", type="primary")
+        if submitted:
+            try:
+                with st.spinner("Chargement des signaux et analyse du cycle…"):
+                    model, feature_names = load_model()
+                    ps2, fs1 = load_signals()
+                    features = prepare_cycle(cycle, ps2, fs1, feature_names)
+                    prediction = int(model.predict(features)[0])
+                    by_class = dict(zip(model.classes_, model.predict_proba(features)[0]))
+                    # Save only this cycle so the result survives Streamlit reruns.
+                    st.session_state["diagnostic_result"] = {
+                        "cycle": int(cycle), "prediction": prediction,
+                        "probabilities": by_class, "features": features,
+                        "pressure": ps2.iloc[cycle - 1].to_numpy(dtype=float),
+                        "flow": fs1.iloc[cycle - 1].to_numpy(dtype=float),
+                    }
+            except FileNotFoundError as exc:
+                st.session_state.pop("diagnostic_result", None)
+                st.error(f"Fichier introuvable : {exc.filename}")
+            except Exception as exc:
+                st.session_state.pop("diagnostic_result", None)
+                st.error(f"Impossible de réaliser la prédiction : {exc}")
+
+        result = st.session_state.get("diagnostic_result")
+        if result is None:
+            st.info("Lancez une analyse pour afficher l’état estimé de la valve et les courbes des capteurs.")
+        else:
+            prediction = result["prediction"]
+            probabilities = result["probabilities"]
+            label = {0: "Optimal", 1: "Non-optimal"}[prediction]
+            st.divider()
+            st.subheader(f"Résultat · Cycle {result['cycle']}")
+            if prediction == 0:
+                st.success("État estimé : Optimal — le modèle classe ce cycle dans le fonctionnement optimal.")
+            else:
+                st.warning("État estimé : Non-optimal — le modèle classe ce cycle dans le fonctionnement non-optimal.")
+            cols = st.columns(3)
+            cols[0].metric("Classe prédite", label)
+            cols[1].metric("Probabilité Optimal", f"{probabilities[0]:.2%}")
+            cols[2].metric("Probabilité Non-optimal", f"{probabilities[1]:.2%}")
+            st.caption("Les probabilités sont des estimations du modèle ; elles ne mesurent pas son exactitude sur ce cycle.")
+
+            pressure, flow = result["pressure"], result["flow"]
+            st.subheader("Les signaux du cycle")
+            left, right = st.columns(2)
+            with left:
+                st.markdown("**PS2 · Pression**")
+                frame = pd.DataFrame({"Temps (s)": np.arange(len(pressure)) / 100, "Pression (bar)": pressure})
+                st.line_chart(frame.set_index("Temps (s)"), color="#1a9caa")
+                st.caption("6 000 mesures · 100 Hz")
+            with right:
+                st.markdown("**FS1 · Débit volumique**")
+                frame = pd.DataFrame({"Temps (s)": np.arange(len(flow)) / 10, "Débit (L/min)": flow})
+                st.line_chart(frame.set_index("Temps (s)"), color="#d48a38")
+                st.caption("600 mesures · 10 Hz")
+
+            st.subheader("Indicateurs du cycle")
+            cols = st.columns(4)
+            cols[0].metric("Pression moyenne", f"{pressure.mean():.2f} bar")
+            cols[1].metric("Pression maximale", f"{pressure.max():.2f} bar")
+            cols[2].metric("Débit moyen", f"{flow.mean():.2f} L/min")
+            cols[3].metric("Débit maximal", f"{flow.max():.2f} L/min")
+            with st.expander("Consulter les caractéristiques transmises au modèle"):
+                st.dataframe(result["features"].T.rename(columns={0: "Valeur"}), use_container_width=True)
+
+    with model_tab:
+        st.subheader("Le pipeline utilisé pour la prédiction")
+        st.write("Les caractéristiques sont standardisées par StandardScaler avant d’être transmises au classifieur sauvegardé.")
+        st.markdown("**Signaux PS2 + FS1 → Caractéristiques → StandardScaler → Classifieur → État de la valve**")
+        try:
+            model, feature_names = load_model()
+            estimator = model.steps[-1][1]
+            params = estimator.get_params()
+            cols = st.columns(3)
+            cols[0].metric("Classifieur chargé", type(estimator).__name__)
+            cols[1].metric("Noyau", str(params.get("kernel", "Sans objet")).upper())
+            cols[2].metric("Caractéristiques utilisées", len(feature_names))
+            st.caption("Ces informations sont lues directement dans le modèle sauvegardé.")
+            with st.expander("Paramètres du classifieur"):
+                st.json(params)
+            st.subheader("Caractéristiques utilisées")
+            st.write("Elles résument le niveau, la dispersion et la dynamique des signaux : moyenne, écart-type, énergie, entropie spectrale, pics et variations temporelles.")
+            st.dataframe(pd.DataFrame({"Caractéristique": feature_names}), use_container_width=True)
+            st.info("Les performances de validation ne sont pas enregistrées dans ce modèle. Consultez le notebook pour les résultats d’évaluation.")
+        except FileNotFoundError as exc:
+            st.error(f"Modèle indisponible : {exc.filename}")
+        except Exception as exc:
+            st.error(f"Impossible de lire le modèle : {exc}")
+
+    st.divider()
+    st.caption("Maintenance Predictive · Projet ML · Diagnostic à partir de cycles enregistrés")
 
 
 if __name__ == "__main__":
